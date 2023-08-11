@@ -15,6 +15,7 @@
 import XCTest
 @_implementationOnly import CNIOBoringSSL
 import NIOCore
+import NIOConcurrencyHelpers
 import NIOPosix
 import NIOEmbedded
 @testable import NIOSSL
@@ -78,22 +79,8 @@ class WaitForHandshakeHandler: ChannelInboundHandler {
 }
 
 class TLSConfigurationTest: XCTestCase {
-    static var cert1: NIOSSLCertificate!
-    static var key1: NIOSSLPrivateKey!
-
-    static var cert2: NIOSSLCertificate!
-    static var key2: NIOSSLPrivateKey!
-
-    override class func setUp() {
-        super.setUp()
-        var (cert, key) = generateSelfSignedCert()
-        TLSConfigurationTest.cert1 = cert
-        TLSConfigurationTest.key1 = key
-
-        (cert, key) = generateSelfSignedCert()
-        TLSConfigurationTest.cert2 = cert
-        TLSConfigurationTest.key2 = key
-    }
+    static let (cert1, key1) = generateSelfSignedCert()
+    static let (cert2, key2) = generateSelfSignedCert()
 
     func assertHandshakeError(withClientConfig clientConfig: TLSConfiguration,
                               andServerConfig serverConfig: TLSConfiguration,
@@ -225,23 +212,38 @@ class TLSConfigurationTest: XCTestCase {
         defer {
             XCTAssertNoThrow(try group.syncShutdownGracefully())
         }
+        let eventLoop = group.next()
 
-        let eventHandler = ErrorCatcher<BoringSSLError>()
-        let handshakeHandler = HandshakeCompletedHandler()
-        let handshakeResultPromise = group.next().makePromise(of: Void.self)
-        let handshakeWatcher = WaitForHandshakeHandler(handshakeResultPromise: handshakeResultPromise)
+        let handshakeResultPromise = eventLoop.makePromise(of: Void.self)
 
-        let serverChannel = try assertNoThrowWithValue(serverTLSChannel(context: serverContext, handlers: [], group: group), file: file, line: line)
-        let clientChannel = try assertNoThrowWithValue(clientTLSChannel(context: clientContext, preHandlers:[], postHandlers: [eventHandler, handshakeWatcher, handshakeHandler], group: group, connectingTo: serverChannel.localAddress!), file: file, line: line)
+        let serverChannel = try assertNoThrowWithValue(serverTLSChannel(context: serverContext, handlers: [], group: eventLoop), file: file, line: line)
+        let clientChannel = try assertNoThrowWithValue(
+            clientTLSChannel(
+                context: clientContext,
+                preHandlersInitializer: {[]},
+                postHandlersInitializer: {
+                    let eventHandler = ErrorCatcher<BoringSSLError>()
+                    let handshakeHandler = HandshakeCompletedHandler()
+                    let handshakeWatcher = WaitForHandshakeHandler(handshakeResultPromise: handshakeResultPromise)
+                    return [eventHandler, handshakeHandler, handshakeWatcher]
+                },
+                group: eventLoop,
+                connectingTo: serverChannel.localAddress!
+            ),
+            file: file, line: line
+        )
 
-        handshakeWatcher.handshakeResult.whenComplete { c in
-            _ = clientChannel.close()
-        }
+        let (errorCount, handshakeSucceeded) = try handshakeResultPromise.futureResult.flatMap { _ in
+            let errorCount = clientChannel.pipeline.handler(type: ErrorCatcher<BoringSSLError>.self).map { $0.errors.count }
+            let handshakeSucceeded = clientChannel.pipeline.handler(type: HandshakeCompletedHandler.self).map { $0.handshakeSucceeded }
+            return errorCount.and(handshakeSucceeded)
+        }.always { _ in
+            clientChannel.close(promise: nil)
+        }.wait()
 
-        clientChannel.closeFuture.whenComplete { _ in
-            XCTAssertEqual(eventHandler.errors.count, 0, file: file, line: line)
-            XCTAssertTrue(handshakeHandler.handshakeSucceeded, file: file, line: line)
-        }
+        XCTAssertEqual(errorCount, 0, file: file, line: line)
+        XCTAssertTrue(handshakeSucceeded, file: file, line: line)
+
         try clientChannel.closeFuture.wait()
     }
 

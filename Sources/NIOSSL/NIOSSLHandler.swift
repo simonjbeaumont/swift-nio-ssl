@@ -368,10 +368,11 @@ public class NIOSSLHandler : ChannelInboundHandler, ChannelOutboundHandler, Remo
                         Please file an issue.
                     """)
                 }
+                let loopBoundSelf = NIOLoopBound(self, eventLoop: context.eventLoop)
                 additionalPeerCertificateVerificationCallback(peerCertificate, context.channel)
                     .hop(to: context.eventLoop)
                     .whenComplete { result in
-                        self.completedAdditionalPeerCertificateVerification(result: result)
+                        loopBoundSelf.value.completedAdditionalPeerCertificateVerification(result: result)
                     }
                 return
             }
@@ -507,8 +508,10 @@ public class NIOSSLHandler : ChannelInboundHandler, ChannelOutboundHandler, Remo
     /// Creates a scheduled task to perform an unclean shutdown in event of a clean shutdown timing
     /// out. This task should be cancelled if the shutdown does not time out.
     private func scheduleTimedOutShutdown(context: ChannelHandlerContext) -> Scheduled<Void> {
+        let loopBoundSelf = NIOLoopBound(self, eventLoop: context.eventLoop)
+        let loopBoundContext = NIOLoopBound(context, eventLoop: context.eventLoop)
         return context.eventLoop.scheduleTask(in: self.shutdownTimeout) {
-            switch self.state {
+            switch loopBoundSelf.value.state {
             case .inputClosed, .outputClosed, .idle, .handshaking, .additionalVerification, .active:
                 preconditionFailure("Cannot schedule timed out shutdown on non-shutting down handler")
 
@@ -518,13 +521,13 @@ public class NIOSSLHandler : ChannelInboundHandler, ChannelOutboundHandler, Remo
 
             case .closing:
                 // We're closing, the only thing we do here is exit.
-                self.state = .closed
-                self.channelClose(context: context, reason: NIOSSLCloseTimedOutError())
+                loopBoundSelf.value.state = .closed
+                loopBoundSelf.value.channelClose(context: loopBoundContext.value, reason: NIOSSLCloseTimedOutError())
 
             case .unwrapping:
                 // The user only wants us to error and unwrap, not to close.
-                self.state = .unwrapped
-                self.channelUnwrap(context: context, failedWithError: NIOSSLCloseTimedOutError())
+                loopBoundSelf.value.state = .unwrapped
+                loopBoundSelf.value.channelUnwrap(context: loopBoundContext.value, failedWithError: NIOSSLCloseTimedOutError())
             }
         }
     }
@@ -650,9 +653,10 @@ public class NIOSSLHandler : ChannelInboundHandler, ChannelOutboundHandler, Remo
             // autoread turned off then we should call read again, because otherwise the user
             // will never see any result from their read call.
             self.plaintextReadBuffer = receiveBuffer
+            let loopBoundContext = NIOLoopBound(context, eventLoop: context.eventLoop)
             context.channel.getOption(ChannelOptions.autoRead).whenSuccess { autoRead in
                 if !autoRead {
-                    context.read()
+                    loopBoundContext.value.read()
                 }
             }
         } else {
@@ -708,6 +712,7 @@ public class NIOSSLHandler : ChannelInboundHandler, ChannelOutboundHandler, Remo
 
     private func channelUnwrap(context: ChannelHandlerContext, failedWithError error: Error? = nil) {
         assert(self.closePromise == nil)
+        context.eventLoop.assertInEventLoop()
         self.state = .unwrapped
 
         let shutdownPromise = self.shutdownPromise
@@ -716,16 +721,18 @@ public class NIOSSLHandler : ChannelInboundHandler, ChannelOutboundHandler, Remo
         // We create a promise here to make sure we operate in the special magic state
         // where we are not in the pipeline any more, but we still have a valid context.
         let removalPromise: EventLoopPromise<Void> = context.eventLoop.makePromise()
+        let loopBoundSelf = NIOLoopBound(self, eventLoop: context.eventLoop)
+        let loopBoundContext = NIOLoopBound(context, eventLoop: context.eventLoop)
         let removalFuture = removalPromise.futureResult.map {
             // Now drop all actions.
-            self.discardBufferedActions(reason: NIOTLSUnwrappingError.unflushedWriteOnUnwrap)
+            loopBoundSelf.value.discardBufferedActions(reason: NIOTLSUnwrappingError.unflushedWriteOnUnwrap)
 
-            if let unconsumedData = self.connection.extractUnconsumedData() {
-                context.fireChannelRead(self.wrapInboundOut(unconsumedData))
+            if let unconsumedData = loopBoundSelf.value.connection.extractUnconsumedData() {
+                loopBoundContext.value.fireChannelRead(loopBoundSelf.value.wrapInboundOut(unconsumedData))
             }
 
             if let error = error {
-                context.fireErrorCaught(error)
+                loopBoundContext.value.fireErrorCaught(error)
             }
         }
 

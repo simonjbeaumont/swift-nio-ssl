@@ -22,49 +22,53 @@ import Security
 
 extension SSLConnection {
     func performSecurityFrameworkValidation(promise: EventLoopPromise<NIOSSLVerificationResult>, peerCertificates: [SecCertificate]) {
-        do {
-            guard case .default = self.parentContext.configuration.trustRoots ?? .default else {
-                preconditionFailure("This callback should only be used if we are using the system-default trust.")
-            }
+        guard case .default = self.parentContext.configuration.trustRoots ?? .default else {
+            preconditionFailure("This callback should only be used if we are using the system-default trust.")
+        }
 
-            // This force-unwrap is safe as we must have decided if we're a client or a server before validation.
-            var trust: SecTrust? = nil
-            var result: OSStatus
-            let policy = SecPolicyCreateSSL(self.role! == .client, self.expectedHostname as CFString?)
-            result = SecTrustCreateWithCertificates(peerCertificates as CFArray, policy, &trust)
-            guard result == errSecSuccess, let actualTrust = trust else {
-                throw NIOSSLError.unableToValidateCertificate
-            }
+        // This force-unwrap is safe as we must have decided if we're a client or a server before validation.
+        let role = self.role!
+        let expectedHostname = self.expectedHostname
+        let tlsConfiguration = self.parentContext.configuration
+        // TODO: Maybe use a @preconcurrency import for this type?
+        let peerCertificates = UnsafeTransfer(peerCertificates as CFArray)
 
-            // If there are additional trust roots then we need to add them to the SecTrust as anchors.
-            let additionalAnchorCertificates: [SecCertificate] = try self.parentContext.configuration.additionalTrustRoots.flatMap { trustRoots -> [NIOSSLCertificate] in
-                guard case .certificates(let certs) = trustRoots else {
-                    preconditionFailure("This callback happens on the request path, file-based additional trust roots should be pre-loaded when creating the SSLContext.")
-                }
-                return certs
-            }.map {
-                guard let secCert = SecCertificateCreateWithData(nil, Data(try $0.toDERBytes()) as CFData) else {
-                    throw NIOSSLError.failedToLoadCertificate
-                }
-                return secCert
-            }
-            if !additionalAnchorCertificates.isEmpty {
-                guard SecTrustSetAnchorCertificates(actualTrust, additionalAnchorCertificates as CFArray) == errSecSuccess else {
-                    throw NIOSSLError.failedToLoadCertificate
-                }
-                // To use additional anchors _and_ the built-in ones we must reenable the built-in ones expicitly.
-                guard SecTrustSetAnchorCertificatesOnly(actualTrust, false) == errSecSuccess else {
-                    throw NIOSSLError.failedToLoadCertificate
-                }
-            }
+        // We create a DispatchQueue here to be called back on, as this validation may perform network activity.
+        let callbackQueue = DispatchQueue(label: "io.swiftnio.ssl.validationCallbackQueue")
 
-            // We create a DispatchQueue here to be called back on, as this validation may perform network activity.
-            let callbackQueue = DispatchQueue(label: "io.swiftnio.ssl.validationCallbackQueue")
+        // SecTrustEvaluateAsync and its cousin withError require that they are called from the same queue given to
+        // them as a parameter. Thus, we async away now.
+        callbackQueue.async {
+            do {
+                let policy = SecPolicyCreateSSL(role == .client, expectedHostname as CFString?)
+                var trust: SecTrust? = nil
+                var result: OSStatus
+                result = SecTrustCreateWithCertificates(peerCertificates.wrappedValue, policy, &trust)
+                guard result == errSecSuccess, let actualTrust = trust else {
+                    throw NIOSSLError.unableToValidateCertificate
+                }
 
-            // SecTrustEvaluateAsync and its cousin withError require that they are called from the same queue given to
-            // them as a parameter. Thus, we async away now.
-            callbackQueue.async {
-                let result: OSStatus
+                // If there are additional trust roots then we need to add them to the SecTrust as anchors.
+                let additionalAnchorCertificates: [SecCertificate] = try tlsConfiguration.additionalTrustRoots.flatMap { trustRoots -> [NIOSSLCertificate] in
+                    guard case .certificates(let certs) = trustRoots else {
+                        preconditionFailure("This callback happens on the request path, file-based additional trust roots should be pre-loaded when creating the SSLContext.")
+                    }
+                    return certs
+                }.map {
+                    guard let secCert = SecCertificateCreateWithData(nil, Data(try $0.toDERBytes()) as CFData) else {
+                        throw NIOSSLError.failedToLoadCertificate
+                    }
+                    return secCert
+                }
+                if !additionalAnchorCertificates.isEmpty {
+                    guard SecTrustSetAnchorCertificates(actualTrust, additionalAnchorCertificates as CFArray) == errSecSuccess else {
+                        throw NIOSSLError.failedToLoadCertificate
+                    }
+                    // To use additional anchors _and_ the built-in ones we must reenable the built-in ones expicitly.
+                    guard SecTrustSetAnchorCertificatesOnly(actualTrust, false) == errSecSuccess else {
+                        throw NIOSSLError.failedToLoadCertificate
+                    }
+                }
 
                 if #available(iOS 13, macOS 10.15, tvOS 13, watchOS 6, *) {
                     result = SecTrustEvaluateAsyncWithError(actualTrust, callbackQueue) { (_, valid, _) in
@@ -79,9 +83,9 @@ extension SSLConnection {
                 if result != errSecSuccess {
                     promise.fail(NIOSSLError.unableToValidateCertificate)
                 }
+            } catch {
+                promise.fail(error)
             }
-        } catch {
-            promise.fail(error)
         }
     }
 }

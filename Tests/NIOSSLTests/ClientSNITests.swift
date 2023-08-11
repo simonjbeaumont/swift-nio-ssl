@@ -20,15 +20,7 @@ import NIOSSL
 
 
 class ClientSNITests: XCTestCase {
-    static var cert: NIOSSLCertificate!
-    static var key: NIOSSLPrivateKey!
-
-    override class func setUp() {
-        super.setUp()
-        let (cert, key) = generateSelfSignedCert()
-        NIOSSLIntegrationTest.cert = cert
-        NIOSSLIntegrationTest.key = key
-    }
+    static let (cert, key) = generateSelfSignedCert()
 
     private func configuredSSLContext() throws -> NIOSSLContext {
         var config = TLSConfiguration.makeServerConfiguration(

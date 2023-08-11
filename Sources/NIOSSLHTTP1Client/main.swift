@@ -63,10 +63,10 @@ private final class HTTPResponseHandler: ChannelInboundHandler {
     }
 }
 
-let arguments = CommandLine.arguments
+let arguments = ProcessInfo.processInfo.arguments
 let arg1 = arguments.dropFirst().first
 
-var url: URL
+let url: URL
 var cert: [NIOSSLCertificateSource] = []
 var key: NIOSSLPrivateKeySource?
 var trustRoot: NIOSSLTrustRoots = .default

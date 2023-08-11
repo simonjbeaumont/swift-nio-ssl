@@ -254,6 +254,9 @@ extension CustomVerifyManager {
 
         let promise = eventLoop.makePromise(of: NIOSSLVerificationResult.self)
 
+        let loopBoundConnection = NIOLoopBound(connection, eventLoop: eventLoop)
+
+
         // We need to attach our "do the thing" callback. This will always invoke the "ask me again" API, and it will do so in a separate
         // event loop tick to avoid awkward re-entrancy with this method.
         promise.futureResult.whenComplete { result in
@@ -263,9 +266,9 @@ extension CustomVerifyManager {
             eventLoop.execute {
                 // Note that we don't close over self here: that's to deal with the fact that this is a struct, and we don't want to
                 // escape the mutable ownership of self.
-                precondition(connection.customVerificationManager == nil || connection.customVerificationManager?.result == .some(.pendingResult))
-                connection.customVerificationManager?.result = .complete(NIOSSLVerificationResult(result))
-                connection.parentHandler?.resumeHandshake()
+                precondition(loopBoundConnection.value.customVerificationManager == nil || loopBoundConnection.value.customVerificationManager?.result == .some(.pendingResult))
+                loopBoundConnection.value.customVerificationManager?.result = .complete(NIOSSLVerificationResult(result))
+                loopBoundConnection.value.parentHandler?.resumeHandshake()
             }
         }
 

@@ -119,13 +119,18 @@ public struct NIOSSLClientTLSProvider<Bootstrap: NIOClientTCPBootstrapProtocol>:
     /// Enable TLS on the bootstrap. This is not a function you will typically call as a user, it is called by
     /// `NIOClientTCPBootstrap`.
     public func enableTLS(_ bootstrap: Bootstrap) -> Bootstrap {
+        let context = self.context
+        let serverHostname = self.serverHostname
+        let customVerificationCallback = self.customVerificationCallback
+        let additionalPeerCertificateVerificationCallback = self.additionalPeerCertificateVerificationCallback
+
         // NIOSSLClientHandler.init only throws because of `malloc` error and invalid SNI hostnames. We want to crash
         // on malloc error and we pre-checked the SNI hostname in `init` so that should be impossible here.
         return bootstrap.protocolHandlers {
             [
                 try! NIOSSLClientHandler(
-                    context: self.context,
-                    serverHostname: self.serverHostname,
+                    context: context,
+                    serverHostname: serverHostname,
                     optionalCustomVerificationCallback: customVerificationCallback,
                     optionalAdditionalPeerCertificateVerificationCallback: additionalPeerCertificateVerificationCallback
                 )

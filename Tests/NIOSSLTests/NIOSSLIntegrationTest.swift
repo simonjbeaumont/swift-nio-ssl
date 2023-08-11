@@ -407,6 +407,22 @@ internal func clientTLSChannel(context: NIOSSLContext,
     return try _clientTLSChannel(context: context, preHandlers: preHandlers, postHandlers: postHandlers, group: group, connectingTo: connectingTo, tlsFactory: tlsFactory)
 }
 
+internal func clientTLSChannel(context: NIOSSLContext,
+                               additionalPeerCertificateVerificationCallback: SendableAdditionalPeerCertificateVerificationCallback? = nil,
+                               preHandlersInitializer: @Sendable @escaping () -> [ChannelHandler],
+                               postHandlersInitializer: @Sendable @escaping () -> [ChannelHandler],
+                               group: EventLoopGroup,
+                               connectingTo: SocketAddress,
+                               serverHostname: String? = nil,
+                               file: StaticString = #filePath,
+                               line: UInt = #line) throws -> Channel {
+    func tlsFactory() -> NIOSSLClientTLSProvider<ClientBootstrap> {
+        return try! .init(context: context, serverHostname: serverHostname, additionalPeerCertificateVerificationCallback: additionalPeerCertificateVerificationCallback)
+    }
+
+    return try _clientTLSChannel(context: context, preHandlersInitializer: preHandlersInitializer, postHandlersInitializer: postHandlersInitializer, group: group, connectingTo: connectingTo, tlsFactory: tlsFactory)
+}
+
 @available(*, deprecated, message: "just for testing the deprecated functionality")
 private struct DeprecatedTLSProviderForTests<Bootstrap: NIOClientTCPBootstrapProtocol>: NIOClientTLSProvider {
     public typealias Bootstrap = Bootstrap
@@ -480,6 +496,29 @@ internal func clientTLSChannel(context: NIOSSLContext,
                                  tlsFactory: tlsFactory)
 }
 
+internal func clientTLSChannel(context: NIOSSLContext,
+                               preHandlersInitializer: @Sendable @escaping () -> [ChannelHandler],
+                               postHandlersInitializer: @Sendable @escaping () -> [ChannelHandler],
+                               group: EventLoopGroup,
+                               connectingTo: SocketAddress,
+                               serverHostname: String? = nil,
+                               customVerificationCallback: @escaping NIOSSLCustomVerificationCallback,
+                               file: StaticString = #filePath,
+                               line: UInt = #line) throws -> Channel {
+    func tlsFactory() -> NIOSSLClientTLSProvider<ClientBootstrap> {
+        return try! .init(context: context,
+                          serverHostname: serverHostname,
+                          customVerificationCallback: customVerificationCallback)
+    }
+
+    return try _clientTLSChannel(context: context,
+                                 preHandlersInitializer: preHandlersInitializer,
+                                 postHandlersInitializer: postHandlersInitializer,
+                                 group: group,
+                                 connectingTo: connectingTo,
+                                 tlsFactory: tlsFactory)
+}
+
 fileprivate func _clientTLSChannel<TLS: NIOClientTLSProvider>(context: NIOSSLContext,
                                                               preHandlers: [ChannelHandler],
                                                               postHandlers: [ChannelHandler],
@@ -498,6 +537,30 @@ fileprivate func _clientTLSChannel<TLS: NIOClientTLSProvider>(context: NIOSSLCon
     .connect(to: connectingTo)
     .flatMap { channel in
         channel.pipeline.addHandlers(preHandlers, position: .first).map {
+            channel
+        }
+    }
+    .wait(), file: file, line: line)
+}
+
+fileprivate func _clientTLSChannel<TLS: NIOClientTLSProvider>(context: NIOSSLContext,
+                                                              preHandlersInitializer: @Sendable @escaping () -> [ChannelHandler],
+                                                              postHandlersInitializer: @Sendable @escaping () -> [ChannelHandler],
+                                                              group: EventLoopGroup,
+                                                              connectingTo: SocketAddress,
+                                                              tlsFactory: @escaping () -> TLS,
+                                                              file: StaticString = #filePath,
+                                                              line: UInt = #line) throws -> Channel where TLS.Bootstrap == ClientBootstrap {
+    let bootstrap = NIOClientTCPBootstrap(ClientBootstrap(group: group),
+                                          tls: tlsFactory())
+    return try assertNoThrowWithValue(bootstrap
+        .channelInitializer { channel in
+            channel.pipeline.addHandlers(postHandlersInitializer())
+    }
+    .enableTLS()
+    .connect(to: connectingTo)
+    .flatMap { channel in
+        channel.pipeline.addHandlers(preHandlersInitializer(), position: .first).map {
             channel
         }
     }
@@ -528,17 +591,12 @@ extension EventLoopFuture {
 }
 
 class NIOSSLIntegrationTest: XCTestCase {
-    static var cert: NIOSSLCertificate!
-    static var key: NIOSSLPrivateKey!
-    static var encryptedKeyPath: String!
+    static let (cert, key) = generateSelfSignedCert()
+    static let encryptedKeyPath: String = try! keyInFile(key: NIOSSLIntegrationTest.key, passphrase: "thisisagreatpassword")
 
     override class func setUp() {
         super.setUp()
         guard boringSSLIsInitialized else { fatalError() }
-        let (cert, key) = generateSelfSignedCert()
-        NIOSSLIntegrationTest.cert = cert
-        NIOSSLIntegrationTest.key = key
-        NIOSSLIntegrationTest.encryptedKeyPath = try! keyInFile(key: NIOSSLIntegrationTest.key, passphrase: "thisisagreatpassword")
     }
 
     override class func tearDown() {

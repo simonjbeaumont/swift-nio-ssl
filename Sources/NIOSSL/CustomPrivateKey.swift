@@ -151,8 +151,11 @@ extension SSLConnection {
         inputBytes.writeBytes(`in`)
 
         let result = customKey.sign(channel: channel, algorithm: wrappedAlgorithm, data: inputBytes)
-        result.whenComplete { signingResult in
-            self.storeCustomPrivateKeyResult(signingResult, channel: channel)
+        let loopBoundSelf = NIOLoopBound(self, eventLoop: channel.eventLoop)
+        result
+        .hop(to: channel.eventLoop)
+        .whenComplete { signingResult in
+            loopBoundSelf.value.storeCustomPrivateKeyResult(signingResult, channel: channel)
         }
 
         return ssl_private_key_retry
@@ -173,8 +176,12 @@ extension SSLConnection {
         inputBytes.writeBytes(`in`)
 
         let result = customKey.decrypt(channel: channel, data: inputBytes)
-        result.whenComplete { decryptionResult in
-            self.storeCustomPrivateKeyResult(decryptionResult, channel: channel)
+
+        let loopBoundSelf = NIOLoopBound(self, eventLoop: channel.eventLoop)
+        result
+        .hop(to: channel.eventLoop)
+        .whenComplete { decryptionResult in
+            loopBoundSelf.value.storeCustomPrivateKeyResult(decryptionResult, channel: channel)
         }
 
         return ssl_private_key_retry
@@ -201,10 +208,11 @@ extension SSLConnection {
         // When we complete here we need to set our result state, and then ask to respin the handshake.
         // If we can't respin the handshake because we've dropped the parent handler, that's fine, no harm no foul.
         // For that reason, we tolerate both the verify manager and the parent handler being nil.
+        let loopBoundSelf = NIOLoopBound(self, eventLoop: channel.eventLoop)
         channel.eventLoop.execute {
-            precondition(self.customPrivateKeyResult == nil)
-            self.customPrivateKeyResult = result
-            self.parentHandler?.resumeHandshake()
+            precondition(loopBoundSelf.value.customPrivateKeyResult == nil)
+            loopBoundSelf.value.customPrivateKeyResult = result
+            loopBoundSelf.value.parentHandler?.resumeHandshake()
         }
     }
 }
