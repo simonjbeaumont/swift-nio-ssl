@@ -1,4 +1,4 @@
-// swift-tools-version:5.6
+// swift-tools-version:5.8
 //===----------------------------------------------------------------------===//
 //
 // This source file is part of the SwiftNIO open source project
@@ -18,6 +18,11 @@ import PackageDescription
 // Used only for environment variables, does not make its way
 // into the product code.
 import class Foundation.ProcessInfo
+
+
+let swiftSettings: [PackageDescription.SwiftSetting] = [
+    .enableExperimentalFeature("StrictConcurrency=complete"),
+]
 
 // This package contains a vendored copy of BoringSSL. For ease of tracking
 // down problems with the copy of BoringSSL in use, we include a copy of the
@@ -63,7 +68,9 @@ MANGLE_END */
             name: "CNIOBoringSSLShims",
             dependencies: [
                 "CNIOBoringSSL"
-            ]),
+            ],
+            swiftSettings: swiftSettings
+        ),
         .target(
             name: "NIOSSL",
             dependencies: [
@@ -73,7 +80,9 @@ MANGLE_END */
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOConcurrencyHelpers", package: "swift-nio"),
                 .product(name: "NIOTLS", package: "swift-nio"),
-            ]),
+            ],
+            swiftSettings: swiftSettings
+        ),
         .executableTarget(
             name: "NIOTLSServer",
             dependencies: [
@@ -84,7 +93,9 @@ MANGLE_END */
             ],
             exclude: [
                 "README.md"
-            ]),
+            ],
+            swiftSettings: swiftSettings
+        ),
         .executableTarget(
             name: "NIOSSLHTTP1Client",
             dependencies: [
@@ -96,7 +107,9 @@ MANGLE_END */
             ],
             exclude: [
                 "README.md"
-            ]),
+            ],
+            swiftSettings: swiftSettings
+        ),
         .executableTarget(
             name: "NIOSSLPerformanceTester",
             dependencies: [
@@ -104,7 +117,9 @@ MANGLE_END */
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOEmbedded", package: "swift-nio"),
                 .product(name: "NIOTLS", package: "swift-nio"),
-            ]),
+            ],
+            swiftSettings: swiftSettings
+        ),
         .testTarget(
             name: "NIOSSLTests",
             dependencies: [
@@ -113,7 +128,9 @@ MANGLE_END */
                 .product(name: "NIOEmbedded", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),
                 .product(name: "NIOTLS", package: "swift-nio"),
-            ]),
+            ],
+            swiftSettings: swiftSettings
+        ),
     ],
     cxxLanguageStandard: .cxx14
 )
